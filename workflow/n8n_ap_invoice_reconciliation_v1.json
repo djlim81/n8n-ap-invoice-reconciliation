@@ -1,0 +1,687 @@
+{
+  "name": "Automated AP Invoice Reconciliation - Portfolio Demo",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Invoice Reconciliation Upload",
+        "formDescription": "Upload an Excel file containing invoice and purchase order records for automated reconciliation.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "InvoiceFile",
+              "fieldType": "file",
+              "multipleFiles": false,
+              "acceptFileTypes": ".xlsx",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        0
+      ],
+      "id": "de095e75-c0cb-4e55-9a65-fede96c99a40",
+      "name": "On form submission",
+      "webhookId": "a78d6f21-b0b0-4fd3-a98c-51b06b2a2482"
+    },
+    {
+      "parameters": {
+        "operation": "xlsx",
+        "binaryPropertyName": "InvoiceFile",
+        "options": {
+          "headerRow": true
+        }
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "1a5ddafa-d225-470b-b41c-9c1bf4d31b50",
+      "name": "Extract Invoice Records"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst items = $input.all();\n\n// STEP 1: Count each Vendor + InvoiceID combination\n\nconst invoiceCounts = new Map();\n\nfor (const item of items) {\n  const invoice = item.json;\n\n  const vendor = String(invoice.Vendor ?? \"\")\n    .trim()\n    .toLowerCase();\n\n  const id = String(invoice.InvoiceID ?? \"\")\n    .trim()\n    .toUpperCase();\n\n  // Skip incomplete keys\n  if (!vendor || !id) continue;\n\n  const key = JSON.stringify([vendor, id]);\n\n  invoiceCounts.set(\n    key,\n    (invoiceCounts.get(key) || 0) + 1\n  );\n}\n\n// STEP 2: Validate each invoice\n\nreturn items.map(item => {\n  const invoice = item.json;\n  const issues = [];\n\n  const vendor = String(invoice.Vendor ?? \"\")\n    .trim()\n    .toLowerCase();\n\n  const id = String(invoice.InvoiceID ?? \"\")\n    .trim()\n    .toUpperCase();\n\n  // Check required information\n  if (!id) {\n    issues.push(\"Missing Invoice ID\");\n  }\n\n  if (!vendor) {\n    issues.push(\"Missing Vendor\");\n  }\n\n  // Check financial data types\n  for (const field of [\"InvoiceAmount\", \"POAmount\"]) {\n    if (\n      typeof invoice[field] !== \"number\" ||\n      !Number.isFinite(invoice[field])\n    ) {\n      issues.push(`Invalid ${field}`);\n    }\n  }\n\n  // Check duplicate Vendor + InvoiceID\n  if (vendor && id) {\n    const key = JSON.stringify([vendor, id]);\n\n    if (invoiceCounts.get(key) > 1) {\n      issues.push(\"Duplicate Vendor + InvoiceID\");\n    }\n  }\n\n  // Preserve original invoice data\n  return {\n    json: {\n      ...invoice,\n      DataQualityStatus:\n        issues.length === 0 ? \"Valid\" : \"Invalid\",\n      DataQualityIssues: issues.join(\"; \")\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        0
+      ],
+      "id": "32f3dc8c-4672-4546-b194-8c0f89496200",
+      "name": "Validate Imported Invoice Data"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 4
+          },
+          "conditions": [
+            {
+              "id": "bb9e707d-9f8b-4d7d-953b-c431841b40b8",
+              "leftValue": "={{ $json.DataQualityStatus }}",
+              "rightValue": "Valid",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        1120,
+        0
+      ],
+      "id": "676966e8-16eb-4d53-ada7-3cdeeb001942",
+      "name": "Check Imported Data Quality"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 4
+          },
+          "conditions": [
+            {
+              "id": "309c6c88-1262-4d32-8ee5-80c12a7e1436",
+              "leftValue": "={{ $json.InvoiceAmount }}",
+              "rightValue": "={{ $json.POAmount }}",
+              "operator": {
+                "type": "number",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        1344,
+        -96
+      ],
+      "id": "db45b8f1-0a00-4a38-bad1-a1d647b5c990",
+      "name": "Compare Invoice and PO Amounts"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b9e53c0f-dab5-4feb-a78a-ff108947b8e2",
+              "name": "Difference",
+              "value": "={{ $json.InvoiceAmount - $json.POAmount }}",
+              "type": "number"
+            },
+            {
+              "id": "4dca2468-2dd8-451d-a095-8741b160ed0f",
+              "name": "ReviewStatus",
+              "value": "Review Required",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1568,
+        -192
+      ],
+      "id": "e896c49f-6d87-44d5-9592-008671bbc486",
+      "name": "Calculate Invoice Exceptions"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "291aa2a2-596a-43a2-8a13-45f44d5f91e2",
+              "name": "Difference",
+              "value": 0,
+              "type": "number"
+            },
+            {
+              "id": "7226246f-6ac6-4ef7-ae18-1cfc9b16328d",
+              "name": "ReviewStatus",
+              "value": "Amount Matched",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1568,
+        0
+      ],
+      "id": "31066ee3-3b94-49b5-9941-483a3d4770e1",
+      "name": "Mark Amounts Matched"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1792,
+        -192
+      ],
+      "id": "2a82d2d4-364b-4d72-8edb-5eee92e6559c",
+      "name": "Merge Reconciliation Results"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst invoices = $input.all().map(item => item.json);\n\nconst reviewRequired = invoices.filter(\n  invoice => invoice.ReviewStatus === \"Review Required\"\n);\n\nconst amountMatched = invoices.filter(\n  invoice => invoice.ReviewStatus === \"Amount Matched\"\n);\n\nconst invoiceTotal = invoices.reduce(\n  (sum, invoice) => sum + invoice.InvoiceAmount, 0\n);\n\nconst poTotal = invoices.reduce(\n  (sum, invoice) => sum + invoice.POAmount, 0\n);\n\nconst netDifference = invoices.reduce(\n  (sum, invoice) => sum + invoice.Difference, 0\n);\n\nconst absoluteDifference = invoices.reduce(\n  (sum, invoice) => sum + Math.abs(invoice.Difference), 0\n);\n\nconst exceptionRate = invoices.length > 0\n  ? (reviewRequired.length / invoices.length) * 100\n  : 0;\n\nreturn [\n  {\n    json: {\n      TotalInvoices: invoices.length,\n      ReviewRequired: reviewRequired.length,\n      AmountMatched: amountMatched.length,\n      InvoiceTotal: invoiceTotal,\n      POTotal: poTotal,\n      NetDifference: netDifference,\n      AbsoluteDifference: absoluteDifference,\n      ExceptionRatePct: exceptionRate\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1952,
+        -320
+      ],
+      "id": "52e8f06e-ab9e-4ba2-9537-85910bfa0651",
+      "name": "Reconciliation Summary"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d45a3b08-98bb-42e0-b194-70fbf620aa1c",
+              "name": "ReviewStatus",
+              "value": "Data Quality Hold",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1344,
+        96
+      ],
+      "id": "7c5d349c-9b97-4328-90d5-231f4ba99873",
+      "name": "Flag Invalid Imported Invoice"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "3380622f-bfb1-45bf-9f14-2a088043729c",
+              "name": "InvoiceID",
+              "value": "={{ $json.InvoiceID ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "2ed8a24e-5360-470d-9b77-e28a1b1bbf12",
+              "name": "Vendor",
+              "value": "={{ $json.Vendor ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "2b9bfed6-7c00-48f7-a945-8d67af0cc852",
+              "name": "InvoiceAmount",
+              "value": "={{ String($json.InvoiceAmount ?? '') }}",
+              "type": "string"
+            },
+            {
+              "id": "30ecf935-853a-49bc-83e6-f4374867e0db",
+              "name": "POAmount",
+              "value": "={{ String($json.POAmount ?? '') }}",
+              "type": "string"
+            },
+            {
+              "id": "7cd5b9c0-1ccb-4450-aaae-8f54d9e5ba47",
+              "name": "DataQualityStatus",
+              "value": "={{ $json.DataQualityStatus ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "7d7e7d6f-c422-4973-893a-e5b286f1563d",
+              "name": "DataQualityIssues",
+              "value": "={{ $json.DataQualityIssues ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "206b27eb-2ac6-4ed7-a7c1-33805923bfb7",
+              "name": "ReviewStatus",
+              "value": "={{ $json.ReviewStatus ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "f663503a-7c11-4924-916f-3a70e47f6024",
+              "name": "SourceBatchID",
+              "value": "={{ $json.SourceBatchID }}",
+              "type": "string"
+            },
+            {
+              "id": "2ccefb79-0459-40b6-b035-c93b717c6aa8",
+              "name": "SourceRowNumber",
+              "value": "={{ $json.SourceRowNumber }}",
+              "type": "number"
+            },
+            {
+              "id": "da67fca9-40fb-4614-9993-e1cb660e4075",
+              "name": "SourceRecordKey",
+              "value": "={{ $json.SourceRecordKey }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1616,
+        144
+      ],
+      "id": "4770425c-d1f9-43c9-966e-f60134b8df54",
+      "name": "Prepare Data Quality Exception Report"
+    },
+    {
+      "parameters": {
+        "operation": "xlsx",
+        "options": {
+          "compression": true,
+          "fileName": "Data_Quality_Exceptions.xlsx",
+          "headerRow": true,
+          "sheetName": "Data_Quality_Exceptions"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1840,
+        144
+      ],
+      "id": "279a3255-1ffd-4d09-8104-cf4288c91b4e",
+      "name": "Generate Data Quality Exception XLSX"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "dd071887-37a4-4c67-87a0-8a7fa230fcb1",
+              "name": "InvoiceID",
+              "value": "={{ $json.InvoiceID }}",
+              "type": "string"
+            },
+            {
+              "id": "138b1070-1704-4f86-8b21-a31b4522f003",
+              "name": "Vendor",
+              "value": "={{ $json.Vendor }}",
+              "type": "string"
+            },
+            {
+              "id": "22ba554d-8623-4f1f-a6bf-9c9e3b1a72fc",
+              "name": "InvoiceAmount",
+              "value": "={{ $json.InvoiceAmount }}",
+              "type": "number"
+            },
+            {
+              "id": "7fa00bea-23cb-4af4-9eaf-d9ac259ab4d5",
+              "name": "POAmount",
+              "value": "={{ $json.POAmount }}",
+              "type": "number"
+            },
+            {
+              "id": "c02491b1-a798-4153-8505-a67833189e81",
+              "name": "Difference",
+              "value": "={{ $json.Difference }}",
+              "type": "number"
+            },
+            {
+              "id": "28f9d6e0-9529-4c0f-a3f9-23c65726b295",
+              "name": "ReviewStatus",
+              "value": "={{ $json.ReviewStatus }}",
+              "type": "string"
+            },
+            {
+              "id": "f968fc2a-614e-4116-837e-20f71746c69c",
+              "name": "DataQualityStatus",
+              "value": "={{ $json.DataQualityStatus }}",
+              "type": "string"
+            },
+            {
+              "id": "70c123ba-c202-473f-aff3-2c2e72873767",
+              "name": "SourceBatchID",
+              "value": "={{ $json.SourceBatchID }}",
+              "type": "string"
+            },
+            {
+              "id": "675dc796-1287-480e-bdc2-4b06f9e0a4f5",
+              "name": "SourceRowNumber",
+              "value": "={{ $json.SourceRowNumber }}",
+              "type": "number"
+            },
+            {
+              "id": "728beb25-8fe1-4038-b3da-c10a99d210c2",
+              "name": "SourceRecordKey",
+              "value": "={{ $json.SourceRecordKey }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1952,
+        -48
+      ],
+      "id": "fd20763c-6d96-4a2f-ab95-968fc3f6ed1e",
+      "name": "Prepare Financial Reconciliation Report"
+    },
+    {
+      "parameters": {
+        "operation": "xlsx",
+        "options": {
+          "compression": true,
+          "fileName": "Financial_Reconciliation_Report.xlsx",
+          "headerRow": true,
+          "sheetName": "Reconciliation_Details"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        2176,
+        -48
+      ],
+      "id": "a2003382-6f1d-4770-ace2-0baa2413d046",
+      "name": "Convert to File"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst invoices = $input.all().map(item => item.json);\n\nconst received = invoices.length;\n\nconst valid = invoices.filter(\n  invoice => invoice.DataQualityStatus === \"Valid\"\n).length;\n\nconst invalid = invoices.filter(\n  invoice => invoice.DataQualityStatus === \"Invalid\"\n).length;\n\nconst unclassified = received - valid - invalid;\n\nconst countCheck = unclassified === 0\n  ? \"PASS\"\n  : \"FAIL\";\n\nreturn [\n  {\n    json: {\n      ReceivedRows: received,\n      ValidRows: valid,\n      InvalidRows: invalid,\n      UnclassifiedRows: unclassified,\n      CountCheck: countCheck\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        -192
+      ],
+      "id": "e1fc0e88-d5a2-4102-b8ec-1b4e51da1fe0",
+      "name": "Batch Intake Control"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2176,
+        -208
+      ],
+      "id": "d81018ba-3380-4e71-9034-9f1d2601d742",
+      "name": "Merge Audit Records"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n\n\n\n\nconst records = $input.all().map(item => item.json);\n\n\n\n\n\n // Retrieve original validated invoices\nconst sourceRecords = $(\"Validate Imported Invoice Data\")\n  .all()\n  .map(item => item.json);\n\n// Independently calculate expected counts\nconst intake = {\n  ReceivedRows: sourceRecords.length,\n\n  ValidRows: sourceRecords.filter(\n    record => record.DataQualityStatus === \"Valid\"\n  ).length,\n\n  InvalidRows: sourceRecords.filter(\n    record => record.DataQualityStatus === \"Invalid\"\n  ).length,\n\n  CountCheck: sourceRecords.every(\n    record => [\"Valid\", \"Invalid\"].includes(record.DataQualityStatus)\n  ) ? \"PASS\" : \"FAIL\"\n};\n\n\n// Count successfully reconciled invoices\nconst reconciled = records.filter(\n  record =>\n    record.DataQualityStatus === \"Valid\" &&\n    [\"Review Required\", \"Amount Matched\"].includes(record.ReviewStatus)\n).length;\n\n// Count invoices held for data quality\nconst dataQualityHolds = records.filter(\n  record =>\n    record.DataQualityStatus === \"Invalid\" &&\n    record.ReviewStatus === \"Data Quality Hold\"\n).length;\n\n// Identify records with unexpected classifications\nconst unexpected = records.length - reconciled - dataQualityHolds;\n\n\nconst sourceKeys = sourceRecords.map(\n  record => record.SourceRecordKey\n);\n\nconst processedKeys = records.map(\n  record => record.SourceRecordKey\n);\n\nconst missingRecordKeys = sourceKeys.filter(\n  key => !processedKeys.includes(key)\n);\n\nconst duplicateRecordKeys = [...new Set(\n  processedKeys.filter(\n    (key, index) => processedKeys.indexOf(key) !== index\n  )\n)];\n\nconst unexpectedRecordKeys = processedKeys.filter(\n  key => !sourceKeys.includes(key)\n);\n\nconst invalidKeyFound = [...sourceKeys, ...processedKeys].some(\n  key => typeof key !== \"string\" || key.trim() === \"\"\n);\n\nconst sourceKeysUnique =\n  new Set(sourceKeys).size === sourceKeys.length;\n\nconst recordIdentityPassed =\n  missingRecordKeys.length === 0 &&\n  duplicateRecordKeys.length === 0 &&\n  unexpectedRecordKeys.length === 0 &&\n  !invalidKeyFound &&\n  sourceKeysUnique;\n\n\n// Check the actual downstream results\nconst auditPassed =\n  intake.CountCheck === \"PASS\" &&\n  records.length === intake.ReceivedRows &&\n  reconciled === intake.ValidRows &&\n  dataQualityHolds === intake.InvalidRows &&\n  unexpected === 0 && recordIdentityPassed;\n\nreturn [\n  {\n    json: {\n      ReceivedRows: intake.ReceivedRows,\n      ExpectedValidRows: intake.ValidRows,\n      ExpectedInvalidRows: intake.InvalidRows,\n      ActualProcessedRows: records.length,\n      ReconciledRows: reconciled,\n      DataQualityHoldRows: dataQualityHolds,\n      UnexpectedRows: unexpected,\n      AuditStatus: auditPassed ? \"PASS\" : \"FAIL\",\n      \nMissingRecordKeys: missingRecordKeys,\nDuplicateRecordKeys: duplicateRecordKeys,\nUnexpectedRecordKeys: unexpectedRecordKeys,\nRecordIdentityCheck: recordIdentityPassed ? \"PASS\" : \"FAIL\",\n\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        -208
+      ],
+      "id": "5cd79e75-ab37-4d41-8974-4a40d67cb413",
+      "name": "Downstream Integrity Check"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst batchId = String($execution.id);\n\nreturn $input.all().map((item, index) => ({\n  json: {\n    ...item.json,\n    SourceBatchID: batchId,\n    SourceRowNumber: index + 2,\n    SourceRecordKey: `${batchId}:${index + 2}`\n  },\n  pairedItem: { item: index }\n}));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ],
+      "id": "1d9cfe29-44c7-41d6-82db-424f96acfcad",
+      "name": "Assign Source Record IDs"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst items = $input.all();\n\nconst requiredColumns = [\n  \"InvoiceID\",\n  \"Vendor\",\n  \"InvoiceAmount\",\n  \"POAmount\"\n];\n\n// Collect field names found in extracted records\nconst observedColumns = [\n  ...new Set(items.flatMap(item => Object.keys(item.json)))\n];\n\n// Normalize names to detect common header typos\nconst normalize = name =>\n  name.toLowerCase().replace(/[^a-z0-9]/g, \"\");\n\n// Find incorrectly named required columns\nconst incorrectHeaders = requiredColumns.flatMap(\n  required => observedColumns\n    .filter(found =>\n      found !== required &&\n      normalize(found) === normalize(required)\n    )\n    .map(found => `${found} (expected ${required})`)\n);\n\nif (incorrectHeaders.length > 0) {\n  throw new Error(\n    \"Invalid Excel template. Incorrect column heading: \" +\n    incorrectHeaders.join(\", \") +\n    \". Please correct the workbook and upload again.\"\n  );\n}\n\n// Pass unchanged records to the existing workflow\nreturn items;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ],
+      "id": "e60c0e1e-86de-410f-b23a-29fbccec3b69",
+      "name": "Validate Excel Template"
+    }
+  ],
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Extract Invoice Records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Invoice Records": {
+      "main": [
+        [
+          {
+            "node": "Validate Excel Template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Imported Invoice Data": {
+      "main": [
+        [
+          {
+            "node": "Check Imported Data Quality",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Batch Intake Control",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Imported Data Quality": {
+      "main": [
+        [
+          {
+            "node": "Compare Invoice and PO Amounts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Flag Invalid Imported Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compare Invoice and PO Amounts": {
+      "main": [
+        [
+          {
+            "node": "Calculate Invoice Exceptions",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark Amounts Matched",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Invoice Exceptions": {
+      "main": [
+        [
+          {
+            "node": "Merge Reconciliation Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Amounts Matched": {
+      "main": [
+        [
+          {
+            "node": "Merge Reconciliation Results",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Reconciliation Results": {
+      "main": [
+        [
+          {
+            "node": "Reconciliation Summary",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare Financial Reconciliation Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flag Invalid Imported Invoice": {
+      "main": [
+        [
+          {
+            "node": "Prepare Data Quality Exception Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Data Quality Exception Report": {
+      "main": [
+        [
+          {
+            "node": "Generate Data Quality Exception XLSX",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Audit Records",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Prepare Financial Reconciliation Report": {
+      "main": [
+        [
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Audit Records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Audit Records": {
+      "main": [
+        [
+          {
+            "node": "Downstream Integrity Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assign Source Record IDs": {
+      "main": [
+        [
+          {
+            "node": "Validate Imported Invoice Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Excel Template": {
+      "main": [
+        [
+          {
+            "node": "Assign Source Record IDs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "active": false
+}

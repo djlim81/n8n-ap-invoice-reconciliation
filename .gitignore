@@ -1,0 +1,9 @@
+# Local config and exports
+.env
+.env.*
+!.env.example
+credentials*.json
+*secrets*
+__pycache__/
+.DS_Store
+Thumbs.db
